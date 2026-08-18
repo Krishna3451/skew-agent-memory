@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SKEW — agent memory under concurrency</title>
+<style>
+:root{
+  --bg:#0c0f18; --panel:#141926; --panel2:#1b2131; --line:#252c40;
+  --ink:#e8ebf5; --ink2:#aab3c9; --mute:#6b7590;
+  --bad:#ff6b7d; --good:#4fd6a8; --warn:#e8b04b; --accent:#6ea8ff;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:15px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  padding:0 20px 80px}
+.wrap{max-width:1180px;margin:0 auto}
+header{padding:46px 0 26px;border-bottom:1px solid var(--line)}
+h1{margin:0;font-size:2.2rem;letter-spacing:-.02em;font-weight:650}
+h1 span{color:var(--accent)}
+.sub{color:var(--ink2);max-width:70ch;margin-top:12px;font-size:1.04rem}
+.claim{margin-top:18px;padding:14px 18px;background:var(--panel);
+  border-left:3px solid var(--accent);border-radius:4px;color:var(--ink2);font-size:.95rem}
+.controls{display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:22px 0}
+button{background:var(--accent);color:#06101f;border:0;border-radius:5px;
+  padding:11px 22px;font-weight:650;font-size:.95rem;cursor:pointer}
+button:disabled{opacity:.45;cursor:not-allowed}
+label{color:var(--mute);font-size:.85rem;font-family:var(--mono)}
+input{width:64px;background:var(--panel2);border:1px solid var(--line);color:var(--ink);
+  border-radius:4px;padding:7px 9px;font-family:var(--mono);font-size:.9rem}
+#status{color:var(--mute);font-family:var(--mono);font-size:.82rem;min-height:18px;padding-bottom:6px}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+@media(max-width:900px){.grid{grid-template-columns:1fr}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:7px;overflow:hidden;
+  display:flex;flex-direction:column}
+.card.win{border-color:var(--good);box-shadow:0 0 0 1px rgba(79,214,168,.22)}
+.chead{padding:15px 18px;border-bottom:1px solid var(--line);background:var(--panel2)}
+.cname{font-family:var(--mono);font-weight:650;font-size:1.02rem}
+.ciso{font-family:var(--mono);font-size:.73rem;color:var(--mute);margin-top:3px}
+.bignum{padding:20px 18px 6px;display:flex;align-items:baseline;gap:10px}
+.bignum b{font-size:3.3rem;line-height:1;font-variant-numeric:tabular-nums;font-weight:660}
+.bignum small{color:var(--mute);font-size:.78rem;font-family:var(--mono);text-transform:uppercase;letter-spacing:.09em}
+.bad b{color:var(--bad)} .good b{color:var(--good)}
+.bars{padding:4px 18px 16px;display:flex;flex-direction:column;gap:7px}
+.bar{display:flex;justify-content:space-between;font-family:var(--mono);font-size:.79rem;color:var(--ink2)}
+.bar span:last-child{font-variant-numeric:tabular-nums}
+.prog{height:3px;background:var(--line);border-radius:2px;overflow:hidden;margin:0 18px 14px}
+.prog i{display:block;height:100%;width:0;background:var(--accent);transition:width .18s}
+.rows{border-top:1px solid var(--line);padding:12px 18px 16px;max-height:250px;overflow:auto}
+.rows h4{margin:0 0 9px;font-size:.71rem;text-transform:uppercase;letter-spacing:.1em;color:var(--mute);font-family:var(--mono)}
+.row{font-family:var(--mono);font-size:.755rem;padding:5px 8px;border-radius:3px;
+  background:var(--panel2);margin-bottom:4px;color:var(--ink2);word-break:break-word}
+.row.dupe{background:rgba(255,107,125,.11);color:#ffc2ca;border-left:2px solid var(--bad)}
+.legend{color:var(--mute);font-size:.8rem;font-family:var(--mono);padding:14px 0 0}
+section.blk{margin-top:44px}
+h2{font-size:1.3rem;margin:0 0 8px;font-weight:640}
+p.lead{color:var(--ink2);margin:0 0 16px;max-width:74ch}
+.panelbox{background:var(--panel);border:1px solid var(--line);border-radius:7px;padding:18px 20px}
+.rq{display:flex;gap:10px;flex-wrap:wrap}
+.rq input[type=text]{flex:1;min-width:260px;width:auto}
+pre{font-family:var(--mono);font-size:.75rem;color:var(--ink2);background:var(--panel2);
+  border:1px solid var(--line);border-radius:5px;padding:12px;overflow:auto;margin:12px 0 0}
+.hit{font-family:var(--mono);font-size:.79rem;padding:8px 10px;background:var(--panel2);
+  border-radius:4px;margin-top:6px;display:flex;justify-content:space-between;gap:12px}
+.hit em{color:var(--good);font-style:normal}
+.ryw{margin-top:12px;font-family:var(--mono);font-size:.83rem}
+.ok{color:var(--good)} .no{color:var(--bad)}
+footer{margin-top:52px;padding-top:20px;border-top:1px solid var(--line);color:var(--mute);font-size:.82rem}
+</style>
+</head>
+<body><div class="wrap">
+
+<header>
+  <h1>SKEW — <span>agent memory under concurrency</span></h1>
+  <p class="sub">Every agent-memory system is benchmarked on recall. None is benchmarked on
+  whether it stays <em>correct</em> when several agents write at once. This runs the same
+  ingest logic three ways against one CockroachDB cluster and counts what breaks.</p>
+  <div class="claim">Identical code, identical database, identical workload. The only
+  variable is transaction discipline. Correct behaviour is <b>one active row per fact</b> —
+  every extra row is a memory the agent will later recall as if it were true.</div>
+</header>
+
+<div class="controls">
+  <button id="go">Run benchmark</button>
+  <label>workers</label><input id="conc" type="number" value="24" min="2" max="64">
+  <label>writes/fact</label><input id="rep" type="number" value="14" min="2" max="40">
+</div>
+<div id="status"></div>
+
+<div class="grid" id="grid"></div>
+<div class="legend" id="legend"></div>
+
+<section class="blk">
+  <h2>Read-your-writes</h2>
+  <p class="lead">The agent stores a memory, then immediately searches for it. On an
+  eventually-consistent vector store this is the classic miss — the agent asks the user again.
+  Here the row and its vector are one commit.</p>
+  <div class="panelbox"><div id="ryw" class="ryw">run the benchmark…</div></div>
+</section>
+
+<section class="blk">
+  <h2>Semantic recall</h2>
+  <p class="lead">Where embeddings <em>do</em> belong: finding a memory phrased differently
+  from the question. Identity stays relational; similarity only ranks. Same table, same
+  transaction boundary, no second system to sync.</p>
+  <div class="panelbox">
+    <div class="rq">
+      <input id="q" type="text" placeholder="who does Ana work for?" value="who does Ana work for?">
+      <button id="ask">Search</button>
+    </div>
+    <div id="hits"></div>
+    <pre id="plan" hidden></pre>
+  </div>
+</section>
+
+<footer>
+  CockroachDB — distributed vector indexing (C-SPANN) + serializable transactions.
+  Anomaly names follow the literature: lost update, write skew, phantom.
+</footer>
+</div>
+
+<script>
+const $=s=>document.querySelector(s);
+const cards={};
+function card(b,iso){
+  const el=document.createElement('div');
+  el.className='card'; el.id='c-'+b;
+  el.innerHTML=`<div class="chead"><div class="cname">${b}</div>
+    <div class="ciso">${iso}</div></div>
+    <div class="bignum bad"><b id="a-${b}">—</b><small>anomalies</small></div>
+    <div class="bars">
+      <div class="bar"><span>duplicate rows</span><span id="d-${b}">—</span></div>
+      <div class="bar"><span>live contradictions</span><span id="k-${b}">—</span></div>
+      <div class="bar"><span>lost reinforcements</span><span id="l-${b}">—</span></div>
+      <div class="bar"><span>rows / expected</span><span id="r-${b}">—</span></div>
+      <div class="bar"><span>txn retries</span><span id="t-${b}">—</span></div>
+      <div class="bar"><span>p95 latency</span><span id="p-${b}">—</span></div>
+    </div>
+    <div class="prog"><i id="g-${b}"></i></div>
+    <div class="rows"><h4>resulting memory</h4><div id="rows-${b}"></div></div>`;
+  $('#grid').appendChild(el); cards[b]=el;
+}
+$('#go').onclick=()=>{
+  $('#grid').innerHTML=''; $('#legend').textContent=''; $('#hits').innerHTML='';
+  $('#plan').hidden=true; $('#ryw').textContent='…'; $('#go').disabled=true;
+  const es=new EventSource(`/api/run?concurrency=${$('#conc').value}&repeats=${$('#rep').value}`);
+  let expected=6;
+  es.addEventListener('status',e=>$('#status').textContent=JSON.parse(e.data).msg);
+  es.addEventListener('start',e=>{const d=JSON.parse(e.data); expected=d.expected_rows;
+    $('#status').textContent=`run ${d.run_id.slice(0,8)} · ${d.ops} writes · ${d.concurrency} workers · ${d.expected_rows} distinct facts · encoder ${d.encoder}`;});
+  es.addEventListener('backend_start',e=>{const d=JSON.parse(e.data); card(d.backend,d.isolation);});
+  es.addEventListener('progress',e=>{const d=JSON.parse(e.data);
+    const g=$('#g-'+d.backend); if(g) g.style.width=(100*d.done/d.total)+'%';});
+  es.addEventListener('backend_done',e=>{const d=JSON.parse(e.data);
+    $('#a-'+d.backend).textContent=d.total_anomalies;
+    $('#d-'+d.backend).textContent=d.duplicates;
+    $('#k-'+d.backend).textContent=d.live_contradictions;
+    $('#l-'+d.backend).textContent=d.lost_reinforcements;
+    $('#r-'+d.backend).textContent=`${d.active_rows} / ${d.expected_active_rows}`;
+    $('#t-'+d.backend).textContent=d.retries;
+    $('#p-'+d.backend).textContent=d.p95_ms+' ms';
+    const box=$('#c-'+d.backend), big=box.querySelector('.bignum');
+    $('#g-'+d.backend).style.width='100%';
+    if(d.total_anomalies===0){big.classList.remove('bad');big.classList.add('good');box.classList.add('win');}
+  });
+  es.addEventListener('rows',e=>{const d=JSON.parse(e.data);
+    const seen={}, host=$('#rows-'+d.backend); host.innerHTML='';
+    d.rows.forEach(r=>{
+      const key=r.subject+'|'+r.predicate+'|'+r.object;
+      seen[key]=(seen[key]||0)+1;
+      const div=document.createElement('div');
+      div.className='row'+(seen[key]>1?' dupe':'');
+      div.textContent=`${r.subject} ${r.predicate} = ${r.object}  (×${r.observations})`;
+      host.appendChild(div);
+    });
+    const keys={}; d.rows.forEach(r=>{const k=r.subject+'|'+r.predicate;(keys[k]=keys[k]||new Set()).add(r.object);});
+    Object.entries(keys).forEach(([k,set])=>{ if(set.size>1){
+      const div=document.createElement('div'); div.className='row dupe';
+      div.textContent=`⚠ ${k.replace('|',' ')} is simultaneously ${[...set].join(' AND ')}`;
+      host.prepend(div);} });
+  });
+  es.addEventListener('ryw',e=>{const d=JSON.parse(e.data);
+    $('#ryw').innerHTML = d.visible_immediately
+      ? `<span class="ok">✓ visible immediately</span> — wrote <code>${d.written.slice(0,8)}</code>, searched with zero delay, found the same row. No polling, no retry loop.`
+      : `<span class="no">✗ not visible</span> — the write committed but the search missed it.`;});
+  es.addEventListener('error',e=>{try{$('#status').textContent='error: '+JSON.parse(e.data).msg;}catch(_){}});
+  es.addEventListener('done',e=>{es.close(); $('#go').disabled=false;
+    $('#legend').textContent=`expected ${expected} active rows — one per distinct subject+predicate. Highlighted rows are memories that should not exist.`;});
+};
+$('#ask').onclick=async()=>{
+  const r=await fetch('/api/recall?q='+encodeURIComponent($('#q').value));
+  const d=await r.json();
+  if(d.error){$('#hits').textContent=d.error;return;}
+  $('#hits').innerHTML=d.hits.map(h=>
+    `<div class="hit"><span>${h.content} <em>→ ${h.object}</em></span><span>${h.distance}</span></div>`).join('');
+  $('#plan').hidden=false; $('#plan').textContent=d.plan;
+};
+</script>
+</body></html>
